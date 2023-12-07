@@ -7,7 +7,15 @@
 #include <Adafruit_APDS9960.h>
 #include <Adafruit_BMP280.h>
 #include <PDM.h>
-#define WHITE_LED 43
+#include <Adafruit_NeoPixel.h>
+#ifdef __AVR__
+ #include <avr/power.h> // Required for 16 MHz Adafruit Trinket
+#endif
+
+#define PIN        1
+#define NUMPIXELS 15
+Adafruit_NeoPixel pixels(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
+#define DELAYVAL 500
 
 Adafruit_Arcada arcada;
 Adafruit_LSM6DS33 lsm6ds33;
@@ -23,11 +31,18 @@ uint32_t buttons, last_buttons;
 uint8_t j = 0;  // neopixel counter for rainbow
 
 double refPress = 101325;
+double refPressStrat = 22632.1;
+double StratAltMult = -6341.72665946;
+double StratAltRefH = 11000;
+int Counter = 9;
+double Data [50]= {};
+double DataBuffer [50]= {};
+double FeetConvert = 304.8;
 
 void setup() {
   Serial.begin(115200);
-
-  // enable NFC pins  
+  pixels.begin();
+  Counter = 9;
   if ((NRF_UICR->NFCPINS & UICR_NFCPINS_PROTECT_Msk) == (UICR_NFCPINS_PROTECT_NFC << UICR_NFCPINS_PROTECT_Pos)){
     Serial.println("Fix NFC pins");
     NRF_NVMC->CONFIG = NVMC_CONFIG_WEN_Wen << NVMC_CONFIG_WEN_Pos;
@@ -39,95 +54,56 @@ void setup() {
     Serial.println("Done");
     NVIC_SystemReset();
   }
-  
-  pinMode(WHITE_LED, OUTPUT);
-  digitalWrite(WHITE_LED, LOW);
-
-  Serial.println("Hello! Arcada Clue test");
-  if (!arcada.arcadaBegin()) {
-    Serial.print("Failed to begin");
-    while (1);
-  }
   arcada.displayBegin();
-  Serial.println("Arcada display begin");
-
   for (int i=0; i<250; i+=10) {
     arcada.setBacklight(i);
     delay(1);
   }
-
   arcada.display->setCursor(0, 0);
   arcada.display->setTextWrap(true);
   arcada.display->setTextSize(2);
   
-  /********** Check QSPI manually */
-  if (!Arcada_QSPI_Flash.begin()){
-    Serial.println("Could not find flash on QSPI bus!");
-    arcada.display->setTextColor(ARCADA_RED);
-    arcada.display->println("QSPI Flash FAIL");
-  } else {
-    uint32_t jedec;
-    jedec = Arcada_QSPI_Flash.getJEDECID();
-  }
+  uint32_t jedec;
+  jedec = Arcada_QSPI_Flash.getJEDECID();
   
   arcada.display->setTextColor(ARCADA_WHITE);
 
-
-  /********** Check APDS */
   if (!apds9960.begin()) {
     Serial.println("No APDS9960 found");
-    arcada.display->setTextColor(ARCADA_RED);
   } else {
     Serial.println("**APDS9960 OK!");
-    arcada.display->setTextColor(ARCADA_GREEN);
     apds9960.enableColor(true);
   }
 
-
-  /********** Check LSM6DS33 */
   if (!lsm6ds33.begin_I2C()) {
     Serial.println("No LSM6DS33 found");
-    arcada.display->setTextColor(ARCADA_RED);
   } else {
     Serial.println("**LSM6DS33 OK!");
-    arcada.display->setTextColor(ARCADA_GREEN);
   }
 
-  
-  /********** Check LIS3MDL */
   if (!lis3mdl.begin_I2C()) {
     Serial.println("No LIS3MDL found");
-    arcada.display->setTextColor(ARCADA_RED);
   } else {
     Serial.println("**LIS3MDL OK!");
-    arcada.display->setTextColor(ARCADA_GREEN);
   }
 
-
-  /********** Check SHT3x */
   if (!sht30.begin(0x44)) {
     Serial.println("No SHT30 found");
-    arcada.display->setTextColor(ARCADA_RED);
   } else {
     Serial.println("**SHT30 OK!");
-    arcada.display->setTextColor(ARCADA_GREEN);
   }
 
-
-  /********** Check BMP280 */
   if (!bmp280.begin()) {
     Serial.println("No BMP280 found");
-    arcada.display->setTextColor(ARCADA_RED);
   } else {
     Serial.println("**BMP280 OK!");
-    arcada.display->setTextColor(ARCADA_GREEN);
   }
 
   arcada.display->setTextWrap(false);
 }
 
-
 void loop() {
+  pixels.clear();
     for (int i=0; i<250; i+=10) {
     arcada.setBacklight(i);
     delay(1);
@@ -158,7 +134,6 @@ void loop() {
   arcada.display->print(" C");
   arcada.display->println("         ");
   
-
   arcada.display->print("Pressure: ");
   arcada.display->println("         ");
   if (bmp280.readPressure() > 80000) {
@@ -182,7 +157,6 @@ void loop() {
   arcada.display->println("         ");
 
   uint16_t r, g, b, c;
-  //wait for color data to be ready
   while(! apds9960.colorDataReady()) {
     delay(5);
   }
@@ -218,16 +192,139 @@ void loop() {
   arcada.display->setTextColor(ARCADA_WHITE, ARCADA_BLACK);
   arcada.display->println("         ");
 
+  arcada.display->setTextColor(ARCADA_WHITE, ARCADA_BLACK);
+  arcada.display->print("Layer: ");
+  arcada.display->println("         ");
+
   double CurTemp = bmp280.readTemperature();
   double CurPress = bmp280.readPressure();
   double Altitude = ((pow(refPress/CurPress,1/5.257)-1)*(CurTemp+273.15))/.0065;
+  double AltitudeStrat = (StratAltMult)*log(CurPress/refPressStrat) +StratAltRefH;
 
-  arcada.display->println("         ");
-  arcada.display->println("         ");
+  if (Altitude <= 10500){
+    Data[Counter] = Altitude;
+    arcada.display->print("Troposphere");
+    arcada.display->println("         ");
+  }
+  else{
+    Data[Counter] = AltitudeStrat;
+    arcada.display->print("Stratosphere");
+    arcada.display->println("         ");
+  }
+
   arcada.display->print("Altitude: ");
   arcada.display->println("         ");
-  arcada.display->print(Altitude);
+
+  int Slope1Check;
+  int Slope2Check;
+  int Slope3Check;
+  int Slope4Check;
+  int Slope5Check;
+
+  double Slope1 = Data[Counter] - Data[Counter-1];
+  if (Slope1 > 0){
+    Slope1Check = 1;
+  } else {
+    Slope1Check = -1;
+  }
+    double Slope2 = (Data[Counter] - Data[Counter-2]);
+  if (Slope2 > 0){
+    Slope2Check = 1;
+  } else {
+    Slope2Check = -1;
+  }
+  double Slope3 = (Data[Counter] - Data[Counter-3]);
+  if (Slope3 > 0){
+    Slope3Check = 1;
+  } else {
+    Slope3Check = -1;
+  }
+  double Slope4 = (Data[Counter] - Data[Counter-4]);
+  if (Slope4 > 0){
+    Slope4Check = 1;
+  } else {
+    Slope4Check = -1;
+  }
+  double Slope5 = (Data[Counter] - Data[Counter-5]);
+  if (Slope5 > 0){
+    Slope5Check = 1;
+  } else {
+    Slope5Check = -1;
+  }
+
+  int AltEstLEDS;
+  if (Data[Counter] >= 0){
+    AltEstLEDS = 1;
+  }
+  if (Data[Counter] >= FeetConvert*1){
+    AltEstLEDS = 2;
+  }
+    if (Data[Counter] >= FeetConvert*2){
+    AltEstLEDS = 3;
+  }
+    if (Data[Counter] >= FeetConvert*3){
+    AltEstLEDS = 4;
+  }
+    if (Data[Counter] >= FeetConvert*4){
+    AltEstLEDS = 5;
+  }
+    if (Data[Counter] >= FeetConvert*5){
+    AltEstLEDS = 6;
+  }
+    if (Data[Counter] >= FeetConvert*6){
+    AltEstLEDS = 7;
+  }
+    if (Data[Counter] >= FeetConvert*7){
+    AltEstLEDS = 8;
+  }
+    if (Data[Counter] >= FeetConvert*8){
+    AltEstLEDS = 9;
+  }
+    if (Data[Counter] >= FeetConvert*9){
+    AltEstLEDS = 10;
+  }
+    if (Data[Counter] >= FeetConvert*10){
+    AltEstLEDS = 11;
+  }
+    if (Data[Counter] >= FeetConvert*11){
+    AltEstLEDS = 12;
+  }
+    if (Data[Counter] >= FeetConvert*12){
+    AltEstLEDS = 13;
+  }
+
+  int Slope = Slope1Check + Slope2Check + Slope3Check + Slope4Check + Slope5Check;  
+  if (Slope <= 0) {
+    arcada.display->setTextColor(ARCADA_RED, ARCADA_BLACK);
+    for (int j = 0; j<AltEstLEDS; j++){
+      pixels.setPixelColor(j, pixels.Color(75, 0, 0));
+    }
+
+  } else {
+    arcada.display->setTextColor(ARCADA_GREEN, ARCADA_BLACK);
+    for (int j = 0; j<AltEstLEDS; j++){
+      pixels.setPixelColor(j, pixels.Color(0, 75, 0));
+    }
+  }
+
+  double AltPrint = Data[Counter];
+  arcada.display->print(AltPrint);
   arcada.display->print(" m");
   arcada.display->println("         ");
 
+  pixels.show();
+  delay(DELAYVAL);
+
+  Counter = Counter + 1;
+
+  if (Counter >= 50) {
+    Counter = 9;
+    for (int i=49; i >= 39; i--){
+      DataBuffer[i]=Data[i];
+    }
+    Data [50]= {};
+    for (int i=0; i < 9; i++){
+      Data[i]=DataBuffer[i+40];
+    }
+  }
 }
