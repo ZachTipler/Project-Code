@@ -37,7 +37,7 @@ double StratAltRefH = 11000;
 int Counter = 9;
 double Data [50]= {};
 double DataBuffer [50]= {};
-double FeetConvert = 304.8;
+double FeetConvert = 3048;
 
 void setup() {
   Serial.begin(115200);
